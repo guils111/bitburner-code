@@ -1,4 +1,4 @@
-import { execScript, getHowManyThreadsCanRun } from "./lib/execHelper";
+import { execScript, getHowManyThreadsCanRun } from "../lib/execHelper";
 
 const SHARE_SCRIPT = "batch/sequential/share.js";
 

@@ -1,4 +1,4 @@
-import { execScript } from "./batch/shotgun/shotgun";
+import { execScript } from "./shotgun/shotgunManager";
 import { deepScan, getRunners, getRunnersServer } from "./lib/scanHelper";
 
 

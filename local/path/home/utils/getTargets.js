@@ -1,4 +1,4 @@
-import { findBestTarget } from "./lib/scanHelper";
+import { findBestTarget } from "../lib/scanHelper";
 
 /** @param {NS} ns */
 export async function main(ns) {

@@ -1,33 +1,29 @@
-import { deepScan, getRunners, getRunnersServer } from "../../lib/scanHelper.js";
-import { wait } from "../../lib/sleepHelper.js";
+import { HACK_PERCENT, IS_SHARE_ENABLED_ON_WAIT, MAX_BATCHS, NUKE_SCRIPT, PURCHASE_SERVER_SCRIPT, SOLVE_CONTRACTS_SCRIPT, WEAKEN_SCRIPT } from "../lib/constants.js";
+import { getHowManyThreadsCanRun } from "../lib/execHelper.js";
+import { deepScan, findBestTarget, getRunners, getRunnersServer } from "../lib/scanHelper.js";
+import { wait } from "../lib/sleepHelper.js";
 
-const HACK_PERCENT = 0.5;
-const WEAKEN_SCRIPT = "/batch/shotgun/weaken.js";
-const GROW_SCRIPT = "/batch/shotgun/grow.js";
-const HACK_SCRIPT = "/batch/shotgun/hack.js";
-const NUKE_SCRIPT = "/batch/shotgun/nuke.js";
-const PURCHASE_SERVER_SCRIPT = "/batch/shotgun/purchaseServer.js";
-const SOLVE_CONTRACTS_SCRIPT = "/contracts/solveContracts.js";
-const MAX_BATCHS = 50000;
-const SHARE = true;
-const RAM_RESERVE = 8;
+
 
 /** @param {NS} ns */
 export async function main(ns) {
   ns.clearLog();
   ns.disableLog("ALL");
 
+  runWorkers(ns);
 
-  await run(ns);
+  if(!ns.hasRootAccess("n00dles")) {
+    await ns.sleep(2000);
+  }
+
+  await shotgun(ns);
 
 }
-
 /**
+ * 
  * @param {NS} ns 
  */
-async function run(ns) {
-  ns.print("Starting.");
-
+function runWorkers(ns) {
   if (!ns.scriptRunning(NUKE_SCRIPT)) {
     ns.exec(NUKE_SCRIPT, "home");
   }
@@ -37,30 +33,45 @@ async function run(ns) {
   if (!ns.scriptRunning(SOLVE_CONTRACTS_SCRIPT) && ns.getServerMaxRam() > 1000) {
     ns.exec(SOLVE_CONTRACTS_SCRIPT, "home");
   }
+}
 
-  await ns.sleep(2000);
+/**
+ * @param {NS} ns 
+ */
+async function shotgun(ns) {
+  ns.print("Starting.");
 
-  var target = await ns.prompt("Server to attack: ", { type: "select", choices: deepScan(ns).filter((a) => !a.includes("hacknet") && ns.hasRootAccess(a) && ns.getServerMaxMoney(a) > 0) });
+  let target;
+  let overrideTarget = await ns.prompt("Override target?");
+  if (overrideTarget) {
+    target = (await ns.prompt("Choose target:", { type: "select", choices: deepScan(ns).filter((a) => !a.includes("hacknet") && ns.hasRootAccess(a) && ns.getServerMaxMoney(a) > 0) })).toString();
+  } else {
+    target = findBestTarget(ns, false, target);
+  }
 
-  var cyclesRan = 0;
   if (!target) {
     ns.exit();
   }
   ns.print(`Best target is ${target}`);
   await prepareServer(ns, target);
+  var timeToSwitchTargets = Date.now() + 600000;
   while (true) {
     var time = performance.now();
-    var runTime = Math.max(ns.getHackTime(target), ns.getGrowTime(target), ns.getWeakenTime(target));
     var threadsAvailable = getHowManyThreadsCanRun(ns, WEAKEN_SCRIPT);
     var threadsPerBatch = calculateBatchThreads(ns, target);
 
     var batchesToStart = Math.min(MAX_BATCHS, Math.floor(threadsAvailable / threadsPerBatch));
-    ns.print(`There are ${ns.format.number(threadsAvailable)} threads available. Each batch requires ${ns.format.number(threadsPerBatch)} threads. Can start ${ns.format.number(Math.floor(threadsAvailable / threadsPerBatch))} batches right now. Will start ${ns.format.number(batchesToStart)}`);
+    ns.print(`INFO - There are ${ns.format.number(threadsAvailable)} threads available. Each batch requires ${ns.format.number(threadsPerBatch)} threads. Can start ${ns.format.number(Math.floor(threadsAvailable / threadsPerBatch))} batches right now. Will start ${ns.format.number(batchesToStart)}`);
 
-    await batch(ns, target, batchesToStart);
-    ns.print(`Batch will take ${ns.format.time(runTime)} to run.`);
+    let runTime = await batch(ns, target, batchesToStart);
+    
     ns.print(performance.now() - time);
-    await wait(ns, runTime, SHARE);
+    await wait(ns, runTime, IS_SHARE_ENABLED_ON_WAIT);
+    if (!overrideTarget && (Date.now() > timeToSwitchTargets || runTime < 2000)) {
+      target = findBestTarget(ns, false, target);
+      await prepareServer(ns, target);
+      timeToSwitchTargets = Date.now() + 600000;
+    }
 
   }
 }
@@ -85,11 +96,11 @@ async function batch(ns, target, instances, runners = getRunnersServer(ns)) {
   var weakenDelay = runTime - ns.getWeakenTime(target);
   var hackDelay = runTime - ns.formulas.hacking.hackTime(targetServer, ns.getPlayer());
   var growDelay = runTime - ns.getGrowTime(target);
-  ns.print(`${target} is at ${ns.format.number(targetServer.hackDifficulty - targetServer.minDifficulty)} above maximum security and at ${ns.format.percent(targetServer.moneyAvailable / targetServer.moneyMax)}% money.`);
+  ns.print(`${target} is at ${ns.format.number((targetServer.hackDifficulty ?? 0) - (targetServer.minDifficulty ?? 0))} above maximum security and at ${ns.format.percent((targetServer.moneyAvailable ?? 0) / (targetServer.moneyMax ?? 0))}% money.`);
 
   var hackThreads = Math.ceil(Math.max((HACK_PERCENT / ns.formulas.hacking.hackChance(targetServer, ns.getPlayer())) / ns.formulas.hacking.hackPercent(targetServer, ns.getPlayer()), 1));
 
-  targetServer.moneyAvailable -= targetServer.moneyAvailable * ns.formulas.hacking.hackPercent(targetServer, ns.getPlayer()) * hackThreads;
+  targetServer.moneyAvailable = targetServer.moneyAvailable ?? 0 - (targetServer.moneyAvailable ?? 0 * ns.formulas.hacking.hackPercent(targetServer, ns.getPlayer()) * hackThreads);
   targetServer.hackDifficulty += ns.hackAnalyzeSecurity(hackThreads);
   var weakenHackThreads = Math.ceil((targetServer.hackDifficulty - targetServer.minDifficulty) / ns.formulas.hacking.weakenEffect(1));
   targetServer.hackDifficulty -= ns.formulas.hacking.weakenEffect(weakenHackThreads);
@@ -245,11 +256,12 @@ async function prepareServer(ns, target, runners = getRunnersServer(ns)) {
 
       ns.print(`Waiting for ${ns.format.time(ns.getWeakenTime(target))} for weaken to run.`);
 
-      await wait(ns, ns.getWeakenTime(target), SHARE);
+      await wait(ns, ns.getWeakenTime(target), IS_SHARE_ENABLED_ON_WAIT);
 
       weakenThreads = calculateWeakenThreads(ns, (ns.getServerSecurityLevel(target) - ns.getServerMinSecurityLevel(target)));
 
       ns.print(`INFO - ${target} was weakened to ${ns.getServerSecurityLevel(target)}. Need ${weakenThreads} more threads to weaken fully.`);
+      runners = getRunnersServer(ns);
     }
 
     var growThreads = Math.ceil(ns.growthAnalyze(target, Math.min((ns.getServerMaxMoney(target) / ns.getServerMoneyAvailable(target)), 100000)));
@@ -273,80 +285,12 @@ async function prepareServer(ns, target, runners = getRunnersServer(ns)) {
       runners = execScript(ns, GROW_SCRIPT, threadsToRun, target, runTime - ns.getGrowTime(target), runners, growRam);
       runners = execScript(ns, WEAKEN_SCRIPT, weakenThreads, target, runTime - ns.getWeakenTime(target), runners, weakenRam);
       ns.print(`Waiting for ${ns.format.time(runTime)} for ${threadsToRun} threads of grow to run.`);
-      await wait(ns, runTime, SHARE);
+      await wait(ns, runTime, IS_SHARE_ENABLED_ON_WAIT);
       growThreads = Math.ceil(ns.growthAnalyze(target, Math.min((ns.getServerMaxMoney(target) / ns.getServerMoneyAvailable(target)), 100000)));
       ns.print(`INFO - ${target} was grow to ${ns.format.percent(ns.getServerMoneyAvailable(target) / ns.getServerMaxMoney(target))} money. Need ${growThreads} more threads to grow fully.`);
+      runners = getRunnersServer(ns);
     }
   }
 
 
-}
-
-/**
- * @param {NS} ns 
- * @param {string} script 
- * @param {import("@/NetscriptDefinitions.js").Server[]} runners 
- * @param {number} [scriptRam=ns.getScriptRam(script)] 
- * @returns {number}
- */
-function getHowManyThreadsCanRun(ns, script, runners = getRunnersServer(ns), scriptRam = ns.getScriptRam(script)) {
-  if (typeof ns != "object" || typeof ns.getServerMaxRam != "function") {
-    throw new Error(`ns is not of type NS: ${typeof ns}`);
-  }
-  if (typeof script != "string") {
-    throw new Error(`script is not a string: ${script}`);
-  }
-  if (!Array.isArray(runners)) {
-    throw new Error(`runners is not an array: ${runners}`);
-  }
-  var threads = 0;
-  runners.forEach((server) => {
-    var serverAvailableRam = server.maxRam - server.ramUsed;
-    if (server == "home") {
-      serverAvailableRam -= RAM_RESERVE;
-    }
-    threads += Math.floor(serverAvailableRam / scriptRam);
-  });
-  return threads;
-}
-
-
-/**
- * 
- * @param {NS} ns 
- * @param {string} script 
- * @param {number} [threads=1] 
- * @param {string} [target=""] 
- * @param {number} [delay=0] 
- * @param {import("@/NetscriptDefinitions.js").Server[]} [runners=getRunnersServer(ns)] 
- * @returns {import("@/NetscriptDefinitions.js").Server[]}
- */
-export function execScript(ns, script, threads = 1, target = "", delay = 0, runners = getRunnersServer(ns), scriptRam = ns.getScriptRam(script)) {
-  for (var runner of runners) {
-    if (threads > 0) {
-      var serverAvailableRam = runner.maxRam - runner.ramUsed;
-      var runnerThreads = Math.min(threads, getHowManyThreadsCanRun(ns, script, [runner], scriptRam));
-      if (runnerThreads > 0) {
-
-        //ns.print("Starting ", script, " on ", runner, " with ", runnerThreads, " threads.");
-        var pid = ns.exec(script, runner.hostname, runnerThreads, target, delay);
-        runner.ramUsed += scriptRam * runnerThreads;
-        if (pid == 0) {
-          ns.scp(script, runner.hostname, "home");
-          pid = ns.exec(script, runner.hostname, runnerThreads, target, delay);
-        }
-        threads -= runnerThreads;
-        if (threads > 0) {
-          runners.shift();
-        }
-      }
-    } else {
-      break;
-    }
-  }
-  if (threads > 0) {
-    ns.print("ERROR - Not enough RAM. Could not run ", script, " with ", threads, " threads.");
-    ns.ui.openTail();
-  }
-  return runners;
 }
