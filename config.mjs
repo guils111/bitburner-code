@@ -10,21 +10,20 @@ const createContext = async () => await context({
   ],
   outbase: "./servers",
   outdir: "./build",
-  plugins: [
-    BitburnerPlugin({
-      port: 12525,
-      types: 'NetscriptDefinitions.d.ts',
-      mirror: {
+  plugins: [BitburnerPlugin({
+    port: 12525,
+    types: 'NetscriptDefinitions.d.ts',
+    mirror: {
       },
       distribute: {
+        'local/path/home': ['home']
       },
-    })
-  ],
+  })],
   bundle: true,
   format: 'esm',
   platform: 'browser',
-  logLevel: 'debug',
+  logLevel: 'info'
 });
 
-const ctx = await createContext();
+let ctx = await createContext();
 ctx.watch();
