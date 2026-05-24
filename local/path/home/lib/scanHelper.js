@@ -1,3 +1,6 @@
+import { NUKE_SCRIPT } from "./constants";
+import { calculateGrowThreads, calculateWeakenThreads, getBestBatchSize, isServerPrepared, simulateBatch, simulateGrow, simulateHack, simulateMegaBatch, simulateWeaken } from "./hackingHelper";
+
 /** 
  * @param {NS} ns 
  * @param {string} root
@@ -63,7 +66,10 @@ export function getRunners(ns) {
  * @return {import("@/NetscriptDefinitions").Server[]}
  */
 export function getRunnersServer(ns) {
-  var servers = [];
+  /**
+   * @type {import("@/NetscriptDefinitions").Server[]}
+   */
+  let servers = []
   getRunners(ns).sort((a, b) => ns.getServerMaxRam(b) - ns.getServerMaxRam(a)).forEach((runner) => {
     servers.push(ns.getServer(runner));
   });
@@ -72,86 +78,97 @@ export function getRunnersServer(ns) {
 
 /** 
  * @param {NS} ns 
- * @return {string} the best target server
+ * @param {string} hackScript 
+ * @param {string} growScript 
+ * @param {string} weakenScript 
+ * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
+ * @return {import("@/NetscriptDefinitions").Server} the best target server
  */
-export function findBestTarget(ns, currentTarget = "n00dles", printToTerminal = false) {
-  if (typeof ns != "object" || typeof ns.getServerMaxRam != "function") {
-    throw new Error(`ns is not of type NS: ${typeof ns}`);
-  }
-  var result = [];
+export function findBestPrepedTarget(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
+  return getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
+    .filter((t) => isServerPrepared(ns, t.target.hostname))
+    .sort((a, b) => b.moneyPSecond - a.moneyPSecond)[0].target;
+}
 
-  deepScan(ns, "home").filter((server) => !server.includes("hacknet") && ns.hasRootAccess(server) && ns.getServerMaxMoney(server) > 0).sort((a, b) => ns.getServerRequiredHackingLevel(b) - ns.getServerRequiredHackingLevel(a))
-    .forEach((s) => {
-      var server = ns.getServer(s);
+/** 
+ * @param {NS} ns 
+ * @param {string} hackScript 
+ * @param {string} growScript 
+ * @param {string} weakenScript 
+ * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
+ * @return {import("@/NetscriptDefinitions").Server} the best target server
+ */
+export function findBestUnprepedTarget(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
+  const bestPrepped = getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
+    .filter((t) => isServerPrepared(ns, t.target.hostname))
+    .sort((a, b) => b.moneyPSecond - a.moneyPSecond)[0];
 
-      var totalThreadsAvailable = 0;
-      getRunners(ns).forEach((r) => {
-        totalThreadsAvailable += Math.floor((ns.getServerMaxRam(r)) / 1.75);
-      })
+  return getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
+    .filter((t) => t.moneyPSecond > bestPrepped.moneyPSecond)
+    .sort((a, b) => (b.target.requiredHackingSkill ?? 0) - (a.target.requiredHackingSkill ?? 0))[0].target;
+}
 
-      var hackThreads = HACK_PERCENT / ns.formulas.hacking.hackPercent(server, ns.getPlayer());
-      hackThreads = Math.ceil(hackThreads * ns.formulas.hacking.hackChance(server, ns.getPlayer()));
-      var hackChance = ns.formulas.hacking.hackChance(server, ns.getPlayer());
-      var hackTime = ns.formulas.hacking.hackTime(server, ns.getPlayer());
-      server.moneyAvailable = server.moneyAvailable * (1 - ns.formulas.hacking.hackPercent(server, ns.getPlayer()) * hackThreads * hackChance);
-      var secIncreaseHack = ns.hackAnalyzeSecurity(hackThreads);
-      var weakenHackThreads = secIncreaseHack / ns.formulas.hacking.weakenEffect(1);
-      var weakenTime = ns.formulas.hacking.weakenTime(server, ns.getPlayer());
-      var prepGrowThreads = ns.formulas.hacking.growThreads(server, ns.getPlayer(), server.moneyMax);
-      var growTime = ns.formulas.hacking.growTime(server, ns.getPlayer());
-      var growSecIncrease = ns.growthAnalyzeSecurity(prepGrowThreads);
-      var weakenGrowThreads = growSecIncrease / ns.formulas.hacking.weakenEffect(1);
-
-      var runTime = Math.max(hackTime, weakenTime, growTime);
-      var moneyStolenPerBatch = server.moneyMax - server.moneyAvailable;
-      var threadsPerBatch = (hackThreads + weakenHackThreads + prepGrowThreads + weakenGrowThreads);
-      var batchesCount = Math.floor(Math.min(totalThreadsAvailable / threadsPerBatch, 50000));
-      var totalMoneyStolen = moneyStolenPerBatch * batchesCount;
-      var moneyPerSecond = totalMoneyStolen / (runTime / 1000);
-      var expPerBatch = ns.formulas.hacking.hackExp(server, ns.getPlayer()) * (hackThreads * hackChance + (hackThreads * (1 - hackChance)) / 4 + weakenHackThreads + prepGrowThreads + weakenGrowThreads);
-      var totalExp = expPerBatch * batchesCount;
-      var expPerSecond = totalExp / (runTime / 1000);
-      server.hackDifficulty = ns.getServerSecurityLevel(s);
-      var prepTime = 0;
-      if (ns.getServerSecurityLevel(s) > ns.getServerMinSecurityLevel(s)) {
-        let prepSecToDecrease = ns.getServerSecurityLevel(s) - ns.getServerMinSecurityLevel(s);
-        let prepWeakenThreads = Math.ceil(prepSecToDecrease / ns.formulas.hacking.weakenEffect(1));
-        prepTime += ns.getWeakenTime(s) * Math.ceil(prepWeakenThreads / totalThreadsAvailable);
-      }
-      if (ns.getServerMoneyAvailable < ns.getServerMaxMoney(s)) {
-        let prepGrowThreads = ns.formulas.hacking.growThreads(ns.getServer(s), ns.getPlayer(), ns.getServer(s).moneyMax) + ns.growthAnalyzeSecurity(prepGrowThreads);
-
-        prepTime += ns.getWeakenTime(s) * Math.ceil(prepGrowThreads / totalThreadsAvailable);
-      }
-
-
-
-      var moneyFirstHour = ((3600 * 1000 - prepTime) / 1000) * moneyPerSecond;
-      if (printToTerminal) {
-        ns.tprint(s.padEnd(20) + " moneyFirstHour: $" + ns.format.number(moneyFirstHour).toString().padEnd(10) + " expPerSecond: " + ns.format.number(expPerSecond).toString().padEnd(10) + "runTime: " + ns.format.number(runTime / 1000).toString().padStart(7) + " seconds prepTime: " + ns.format.time(prepTime) + "\n");
-      }
-
-
-      result.push({ "server": s, "moneyFirstHour": moneyFirstHour, "expPerSecond": expPerSecond, "runTime": runTime, "prepTime": prepTime })
-
-
+/** 
+ * @param {NS} ns 
+ * @param {string} hackScript 
+ * @param {string} growScript 
+ * @param {string} weakenScript 
+ * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
+ * @return {{
+ * target: import("@/NetscriptDefinitions").Server,
+ * moneyPSecond: number
+ * }[]}
+ */
+export function getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
+  const runners = getRunnersServer(ns);
+  /**
+   * @type {{
+ * target: import("@/NetscriptDefinitions").Server,
+ * moneyPSecond: number
+ * }[]}
+   */
+  const result = []
+  possibleTargets.forEach((targetName) => {
+    const targetServer = ns.getServer(targetName);
+    const player = ns.getPlayer();
+    const batchResult = simulateMegaBatch(ns, targetServer, player, hackScript, weakenScript, growScript);
+    let moneyStolen = 0;
+    batchResult.forEach((b) => {
+      moneyStolen += b.moneyStolen;
     });
-  var currentValue = 0;
-  var bestValue = 0;
-
-  result.sort((a, b) => b["moneyFirstHour"] - a["moneyFirstHour"]);
-  currentValue = result.find((a) => a["server"] == currentTarget)["moneyFirstHour"];
-  result = result.filter((a) => a["runTime"] > 10000 && a["prepTime"] < 600000);
-  bestValue = result[0]["moneyFirstHour"];
-  ns.print(`Current target ${currentTarget} moneyPerHour \$${ns.format.number(currentValue)}, best target ${result[0]["server"]} moneyPerHour \$${ns.format.number(bestValue)}`);
-
-  if (bestValue > currentValue * 1.3) {
-    ns.print(`returning best target ${result[0]["server"]}`);
-    return result[0]["server"];
-  } else {
-    ns.print(`returning current target ${currentTarget}`);
-    return currentTarget;
-  }
+    const moneyPSecond = (moneyStolen / (ns.getWeakenTime(targetServer.hostname) / 1000));
+    result.push({ target: targetServer, moneyPSecond: moneyPSecond });
 
 
+  });
+
+
+  return result;
+}
+
+/**
+ * 
+ * @param {NS} ns
+ * @returns {string[]} 
+ */
+export function getAllHackTargets(ns) {
+  return deepScan(ns).filter((target) => {
+    return !target.includes("hacknet") &&
+      !ns.dnet.isDarknetServer(target) &&
+      ns.hasRootAccess(target) &&
+      ns.getServerMaxMoney(target) > 0;
+  });
+}
+
+/**
+ * 
+ * @param {NS} ns 
+ * @param {import("@/NetscriptDefinitions").Server[]} servers 
+ */
+export function getMaxRamSum(ns, servers) {
+  let totalRam = 0;
+  servers.forEach((s) => {
+    totalRam += s.maxRam;
+  })
+  return totalRam;
 }

@@ -7,30 +7,41 @@ import { getRunnersServer } from './scanHelper.js';
  * 
  * @param {NS} ns 
  * @param {string} script 
- * @param {number} [threads=1] 
- * @param {string} [target=""] 
- * @param {number} [delay=0] 
- * @param {import("@/NetscriptDefinitions.js").Server[]} [runners=getRunnersServer(ns)] 
- * @returns {import("@/NetscriptDefinitions.js").Server[]}
+ * @param {number} threads 
+ * @param {import("@/NetscriptDefinitions.js").Server[]} runners 
+ * @param {number} scriptRam 
+ * @param {boolean} canSplitThreads 
+ * @param {import('@/NetscriptDefinitions.js').ScriptArg[]} [args=[]] 
+ * @returns {{runners: import("@/NetscriptDefinitions.js").Server[], pids: number[]}}
  */
-export function execScript(ns, script, threads = 1, target = "", delay = 0, runners = getRunnersServer(ns), scriptRam = ns.getScriptRam(script)) {
-    for (var runner of runners) {
+export function execScript(ns, script, threads, runners, scriptRam, canSplitThreads, args = [] ) {
+    /**
+     * @type {number[]}
+     */
+    const pids = [];
+    for (const runner of runners) {
         if (threads > 0) {
-            var serverAvailableRam = runner.maxRam - runner.ramUsed;
-            var runnerThreads = Math.min(threads, getHowManyThreadsCanRun(ns, script, [runner], scriptRam));
-            if (runnerThreads > 0) {
+            const serverAvailableRam = runner.maxRam - runner.ramUsed;
+            const runnerThreads = Math.min(threads, getHowManyThreadsCanRun(ns, script, [runner], scriptRam));
+            if ((runnerThreads > 0 && canSplitThreads) || (!canSplitThreads && runnerThreads == threads)) {
 
                 //ns.print("Starting ", script, " on ", runner, " with ", runnerThreads, " threads.");
-                var pid = ns.exec(script, runner.hostname, runnerThreads, target, delay);
+                let pid = ns.exec(script, runner.hostname, runnerThreads, ...args);
                 runner.ramUsed += scriptRam * runnerThreads;
                 if (pid == 0) {
                     ns.scp(script, runner.hostname, "home");
-                    pid = ns.exec(script, runner.hostname, runnerThreads, target, delay);
+                    pid = ns.exec(script, runner.hostname, runnerThreads, ...args);
                 }
-                threads -= runnerThreads;
-                if (threads > 0) {
-                    runners.shift();
+                if(pid > 0) {
+                    pids.push(pid);
+                    threads -= runnerThreads;
+                    runners[runners.indexOf(runner)].ramUsed += scriptRam*runnerThreads;
+                } else {
+                    ns.print(`ERROR - Script execution failed. ${JSON.stringify({script, threads, runners, scriptRam, canSplitThreads, args})}`);
+                    ns.ui.openTail();
+                    throw new Error(`Script execution failed. Check logs.`);
                 }
+                
             }
         } else {
             break;
@@ -40,7 +51,7 @@ export function execScript(ns, script, threads = 1, target = "", delay = 0, runn
         ns.print("ERROR - Not enough RAM. Could not run ", script, " with ", threads, " threads.");
         ns.ui.openTail();
     }
-    return runners;
+    return {runners, pids: pids};
 }
 
 
@@ -51,7 +62,7 @@ export function execScript(ns, script, threads = 1, target = "", delay = 0, runn
  * @param {number} [scriptRam=ns.getScriptRam(script)] 
  * @returns {number}
  */
-export function getHowManyThreadsCanRun(ns, script, runners = getRunnersServer(ns), scriptRam = ns.getScriptRam(script)) {
+export function getHowManyThreadsCanRun(ns, script, runners = getRunnersServer(ns), scriptRam = ns.getScriptRam(script, "home")) {
     let threads = 0;
     runners.forEach((server) => {
         var serverAvailableRam = server.maxRam - server.ramUsed;
