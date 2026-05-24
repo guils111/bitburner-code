@@ -1,26 +1,68 @@
-import { NUKE_SCRIPT } from "./constants";
-import { calculateGrowThreads, calculateWeakenThreads, getBestBatchSize, isServerPrepared, simulateBatch, simulateGrow, simulateHack, simulateMegaBatch, simulateWeaken } from "./hackingHelper";
+const DEFAULT_DEEP_SCAN_CACHE_TTL_MS = 5000;
+const deepScanCache = new Map();
+
+/**
+ * @param {NS} ns
+ * @param {string} [root="home"]
+ * @param {number} [ttlMs=1000]
+ * @return {string[]} list of all servers found
+ */
+export function deepScan(ns, root = "home", ttlMs = DEFAULT_DEEP_SCAN_CACHE_TTL_MS) {
+  const now = Date.now();
+  if (ttlMs > 0) {
+    const cached = deepScanCache.get(root);
+    if (cached && cached.expiresAt > now) {
+      return [...cached.servers];
+    }
+  }
+
+  const servers = deepScan2(ns, root);
+
+  if (ttlMs > 0) {
+    deepScanCache.set(root, {
+      expiresAt: now + ttlMs,
+      servers,
+    });
+  }
+
+  return [...servers];
+}
+
+/**
+ * @param {string | undefined} [root]
+ */
+export function clearDeepScanCache(root = undefined) {
+  if (typeof root === "string") {
+    deepScanCache.delete(root);
+    return;
+  }
+  deepScanCache.clear();
+}
 
 /** 
  * @param {NS} ns 
  * @param {string} root
  * @return {string[]} list of all servers found
  */
-export function deepScan(ns, root = "home") {
-  if (typeof ns != "object" || typeof ns.getServerMaxRam != "function") {
-    throw new Error(`ns is not of type NS: ${typeof ns}`);
+export function deepScan2(ns, root = "home") {
+  const seen = new Set([root]);
+  const result = [];
+  const stack = [root];
+
+  while (stack.length > 0) {
+    const server = stack.pop();
+    const neighbors = ns.scan(server);
+
+    for (const neighbor of neighbors) {
+      if (seen.has(neighbor)) {
+        continue;
+      }
+      seen.add(neighbor);
+      result.push(neighbor);
+      stack.push(neighbor);
+    }
   }
-  if (typeof root != "string") {
-    throw new Error(`root is not a string: ${root}`);
-  }
-  var neighbors = ns.scan(root);
-  if (root != "home") {
-    neighbors.shift();
-  }
-  var result = neighbors;
-  for (var server of neighbors) {
-    result = result.concat(deepScan(ns, server));
-  }
+
   return result;
 }
 
@@ -51,9 +93,6 @@ export function getPathToServer(ns, target) {
 
 /** @param {NS} ns */
 export function getRunners(ns) {
-  if (typeof ns != "object" || typeof ns.getServerMaxRam != "function") {
-    throw new Error(`ns is not of type NS: ${typeof ns}`);
-  }
   var runners = deepScan(ns).filter((a) => {
     return !a.includes("hacknet") && ns.hasRootAccess(a) && ns.getServerMaxRam(a) > 0;
   });
@@ -61,114 +100,12 @@ export function getRunners(ns) {
   return runners;
 }
 
-/** 
- * @param {NS} ns
- * @return {import("@/NetscriptDefinitions").Server[]}
- */
-export function getRunnersServer(ns) {
-  /**
-   * @type {import("@/NetscriptDefinitions").Server[]}
-   */
-  let servers = []
-  getRunners(ns).sort((a, b) => ns.getServerMaxRam(b) - ns.getServerMaxRam(a)).forEach((runner) => {
-    servers.push(ns.getServer(runner));
-  });
-  return servers;
-}
-
-/** 
- * @param {NS} ns 
- * @param {string} hackScript 
- * @param {string} growScript 
- * @param {string} weakenScript 
- * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
- * @return {import("@/NetscriptDefinitions").Server} the best target server
- */
-export function findBestPrepedTarget(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
-  return getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
-    .filter((t) => isServerPrepared(ns, t.target.hostname))
-    .sort((a, b) => b.moneyPSecond - a.moneyPSecond)[0].target;
-}
-
-/** 
- * @param {NS} ns 
- * @param {string} hackScript 
- * @param {string} growScript 
- * @param {string} weakenScript 
- * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
- * @return {import("@/NetscriptDefinitions").Server} the best target server
- */
-export function findBestUnprepedTarget(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
-  const bestPrepped = getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
-    .filter((t) => isServerPrepared(ns, t.target.hostname))
-    .sort((a, b) => b.moneyPSecond - a.moneyPSecond)[0];
-
-  return getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
-    .filter((t) => t.moneyPSecond > bestPrepped.moneyPSecond)
-    .sort((a, b) => (b.target.requiredHackingSkill ?? 0) - (a.target.requiredHackingSkill ?? 0))[0].target;
-}
-
-/** 
- * @param {NS} ns 
- * @param {string} hackScript 
- * @param {string} growScript 
- * @param {string} weakenScript 
- * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
- * @return {{
- * target: import("@/NetscriptDefinitions").Server,
- * moneyPSecond: number
- * }[]}
- */
-export function getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
-  const runners = getRunnersServer(ns);
-  /**
-   * @type {{
- * target: import("@/NetscriptDefinitions").Server,
- * moneyPSecond: number
- * }[]}
-   */
-  const result = []
-  possibleTargets.forEach((targetName) => {
-    const targetServer = ns.getServer(targetName);
-    const player = ns.getPlayer();
-    const batchResult = simulateMegaBatch(ns, targetServer, player, hackScript, weakenScript, growScript);
-    let moneyStolen = 0;
-    batchResult.forEach((b) => {
-      moneyStolen += b.moneyStolen;
-    });
-    const moneyPSecond = (moneyStolen / (ns.getWeakenTime(targetServer.hostname) / 1000));
-    result.push({ target: targetServer, moneyPSecond: moneyPSecond });
-
-
-  });
-
-
-  return result;
-}
-
-/**
- * 
- * @param {NS} ns
- * @returns {string[]} 
- */
-export function getAllHackTargets(ns) {
-  return deepScan(ns).filter((target) => {
-    return !target.includes("hacknet") &&
-      !ns.dnet.isDarknetServer(target) &&
-      ns.hasRootAccess(target) &&
-      ns.getServerMaxMoney(target) > 0;
-  });
-}
-
 /**
  * 
  * @param {NS} ns 
- * @param {import("@/NetscriptDefinitions").Server[]} servers 
+ * @param {string[]} servers 
+ * @returns {number}
  */
-export function getMaxRamSum(ns, servers) {
-  let totalRam = 0;
-  servers.forEach((s) => {
-    totalRam += s.maxRam;
-  })
-  return totalRam;
+export function getTotalAvailableRam(ns, servers = getRunners(ns)) {
+  return servers.map((s) => ns.getServerMaxRam(s)).reduce((total, cur) => total + cur);
 }

@@ -1,14 +1,10 @@
-import { NUKE_SCRIPT, PURCHASE_SERVER_SCRIPT, SOLVE_CONTRACTS_SCRIPT } from "../lib/constants";
 import { execScript } from "../lib/execHelper";
-import { getBestBatchSize, isServerPrepared, simulateBatch, simulateMegaBatch } from "../lib/hackingHelper";
-import { getMaxRamSum, getRunners, getRunnersServer } from "../lib/scanHelper";
+import { isServerPrepared, simulateMegaBatch } from "../lib/hackingHelper";
+import { getRunners } from "../lib/scanHelper";
 
-const HACK_SCRIPT = "/continuousBatcher/workers/hack.js";
-const WEAKEN_SCRIPT = "/continuousBatcher/workers/weaken.js";
-const GROW_SCRIPT = "/continuousBatcher/workers/grow.js";
-let hackRam = 0;
-let weakenRam = 0;
-let growRam = 0;
+const HACK_SCRIPT = "/continousBatcher/workers/hack.js";
+const WEAKEN_SCRIPT = "/continousBatcher/workers/weaken.js";
+const GROW_SCRIPT = "/continousBatcher/workers/grow.js";
 let managerPort = 0;
 let targetName = "";
 
@@ -17,9 +13,6 @@ let targetName = "";
  * @param {NS} ns 
  */
 function init(ns) {
-  hackRam = ns.getScriptRam(HACK_SCRIPT, "home");
-  weakenRam = ns.getScriptRam(WEAKEN_SCRIPT, "home");
-  growRam = ns.getScriptRam(GROW_SCRIPT, "home");
   ns.clearPort(ns.self().pid);
   targetName = ns.args[0]?.toString();
   managerPort = Number.parseInt(ns.args[1]?.toString());
@@ -32,77 +25,32 @@ export async function main(ns) {
   ns.clearLog();
   ns.disableLog("ALL");
   init(ns);
-  runWorkers(ns);
-
-  keepBatchesRunning(ns, launchBatches(ns));
+  ns.print(`INFO - Starting continous batch against ${targetName}`);
+  launchBatches(ns);
+  await keepBatchesRunning(ns);
 
 }
+
 /**
  * 
  * @param {NS} ns 
  */
-function runWorkers(ns) {
-  if (!ns.scriptRunning(NUKE_SCRIPT)) {
-    ns.exec(NUKE_SCRIPT, "home");
-  }
-  if (!ns.scriptRunning(PURCHASE_SERVER_SCRIPT) && ns.getServerMaxRam() > 64) {
-    ns.exec(PURCHASE_SERVER_SCRIPT, "home");
-  }
-  if (!ns.scriptRunning(SOLVE_CONTRACTS_SCRIPT) && ns.getServerMaxRam() > 1000) {
-    ns.exec(SOLVE_CONTRACTS_SCRIPT, "home");
-  }
-}
-/**
- * 
- * @param {NS} ns 
- * @param {{ 
- * server: import("@/NetscriptDefinitions").Server, 
- * player: import("@/NetscriptDefinitions").Person, 
- * moneyStolen: number, 
- * hackThreads: number,
- * weakenHackThreads: number, 
- * growThreads: number, 
- * weakenGrowThreads: number, 
- * expGained: number }} lastBatch 
- */
-async function keepBatchesRunning(ns, lastBatch) {
+async function keepBatchesRunning(ns) {
   const batchPort = ns.self().pid;
-  let nextMegaBatch = simulateMegaBatch(ns, lastBatch.server, lastBatch.player, HACK_SCRIPT, WEAKEN_SCRIPT, GROW_SCRIPT);
-  let totalRam = getMaxRamSum(ns, getRunnersServer(ns));
+
   while (true) {
     await ns.nextPortWrite(batchPort);
-    let data;
-    while ((data = ns.readPort(batchPort)) !== "NULL PORT DATA") {
-      const runners = getRunnersServer(ns);
-      const targetName = lastBatch.server.hostname;
-      if (nextMegaBatch.length < 1) {
-        nextMegaBatch = simulateMegaBatch(ns, lastBatch.server, lastBatch.player, HACK_SCRIPT, WEAKEN_SCRIPT, GROW_SCRIPT);
-      }
-      let nextBatch = nextMegaBatch.shift();
-      if (!nextBatch) {
-        ns.print(`ERROR - Next batch is not available.`);
-        ns.exit();
-      }
-      if (data !== ns.getHackingLevel()) {
-        ns.print(`WARN - Hacking skill desync. Expected ${data} was ${ns.getHackingLevel()}`);
-        ns.exit();
-      }
 
-      if (!isServerPrepared(ns, targetName)) {
-        const secAboveMin = ns.getServerSecurityLevel(targetName) - ns.getServerMinSecurityLevel(targetName);
-        const moneyPercent = (ns.getServerMoneyAvailable(targetName) / ns.getServerMaxMoney(targetName)) * 100;
-        ns.print(`ERROR - Server ${targetName} is not prepared. Sec above min ${secAboveMin}, money at ${ns.format.percent(moneyPercent, 0)}`);
-        ns.exit();
-      }
-
-      const weakenTime = ns.getWeakenTime(targetName);
-      const growTime = ns.getGrowTime(targetName);
-      const hackTime = ns.getHackTime(targetName);
-      executeBatch(ns, runners, nextBatch, weakenTime, growTime, hackTime, batchPort);
-
+    if (!isServerPrepared(ns, targetName)) {
+      const secAboveMin = ns.getServerSecurityLevel(targetName) - ns.getServerMinSecurityLevel(targetName);
+      const moneyPercent = (ns.getServerMoneyAvailable(targetName) / ns.getServerMaxMoney(targetName)) * 100;
+      ns.print(`ERROR - Server ${targetName} is not prepared. Sec above min ${secAboveMin}, money at ${ns.format.percent(moneyPercent, 0)}`);
+      ns.exit();
     }
-  }
 
+    launchBatches(ns);
+
+  }
 }
 
 /**
@@ -134,25 +82,32 @@ function abort(ns) {
  * expGained: number }}
  */
 function launchBatches(ns) {
+  ns.print(`INFO - Launching batches.`)
   const player = ns.getPlayer();
   const server = ns.getServer(targetName);
-  let runners = getRunnersServer(ns);
 
   const megaBatch = simulateMegaBatch(ns, server, player, HACK_SCRIPT, WEAKEN_SCRIPT, GROW_SCRIPT);
+  ns.print(`INFO - Predicted a mega batch of ${megaBatch.length} batches against ${targetName}`);
   const reportBackPort = ns.self().pid;
   const weakenTime = ns.getWeakenTime(targetName);
   const growTime = ns.getGrowTime(targetName);
   const hackTime = ns.getHackTime(targetName);
+  let lastPid = 0;
   for (const batch of megaBatch) {
-    runners = executeBatch(ns, runners, batch, weakenTime, growTime, hackTime, reportBackPort);
+    lastPid = executeBatch(ns, batch, weakenTime, growTime, hackTime)
+    if (lastPid <= 0) {
+      break;
+    }
   }
+  ns.kill(lastPid);
+  execWeaken(ns, megaBatch[megaBatch.length - 1].weakenGrowThreads, targetName, 0, reportBackPort, megaBatch[megaBatch.length - 1].player.skills.hacking.toString());
+
   return megaBatch[megaBatch.length - 1];
 }
 
 /**
  *
  * @param {NS} ns
- * @param {import("@/NetscriptDefinitions.js").Server[]} runners
  * @param {{
  * hackThreads: number, 
  * weakenHackThreads: number, 
@@ -162,31 +117,37 @@ function launchBatches(ns) {
  * @param {number} weakenTime
  * @param {number} growTime
  * @param {number} hackTime
- * @param {number} reportBackPort
- * @returns {import("@/NetscriptDefinitions.js").Server[]}
+ * @returns {number}
  */
-function executeBatch(ns, runners, batch, weakenTime, growTime, hackTime, reportBackPort) {
-  let execResult = execHack(ns, batch.hackThreads, runners, targetName, false, weakenTime - hackTime);
+function executeBatch(ns, batch, weakenTime, growTime, hackTime) {
+  ns.print(`INFO - Executing batch against ${targetName}. ${JSON.stringify(batch)}`);
+  let hackPid = execHack(ns, batch.hackThreads, targetName, false, weakenTime - hackTime);
 
-  execResult = execWeaken(ns, batch.weakenHackThreads, execResult.runners, targetName, 0);
-  execResult = execGrow(ns, batch.growThreads, execResult.runners, targetName, weakenTime - growTime, false);
-  execResult = execWeaken(ns, batch.weakenGrowThreads, execResult.runners, targetName, 0, reportBackPort, batch.player.skills.hacking.toString());
-  return execResult.runners
+  let weakenHackPid = execWeaken(ns, batch.weakenHackThreads, targetName, 0);
+  let growPid = execGrow(ns, batch.growThreads, targetName, weakenTime - growTime, false);
+  let weakenGrowPid = execWeaken(ns, batch.weakenGrowThreads, targetName, 0);
+
+  if (hackPid <= 0 || weakenHackPid <= 0 || growPid <= 0 || weakenGrowPid <= 0) {
+    ns.print(`WARN - Batch could not be executed fully. Killing this batch. ${JSON.stringify({hackPid, weakenHackPid, growPid, weakenGrowPid})}`);
+    ns.kill(hackPid);
+    ns.kill(weakenHackPid);
+    ns.kill(growPid);
+    ns.kill(weakenGrowPid);
+    return 0;
+  }
+  return weakenGrowPid;
 }
 /**
  * 
  * @param {NS} ns 
  * @param {string} target 
  * @param {number} threads 
- * @param {import("@/NetscriptDefinitions.js").Server[]} runners 
  * @param {boolean} affectStock
  * @param {number} delay 
- * @returns {{runners: import("@/NetscriptDefinitions.js").Server[], pid: number}}
+ * @returns {number}
  */
-function execHack(ns, threads, runners, target, affectStock, delay) {
-  const execResult = execScript(ns, HACK_SCRIPT, threads, runners, hackRam, false, [target, affectStock]);
-
-  return { runners: execResult.runners, pid: execResult.pids[0] };
+function execHack(ns, threads, target, affectStock, delay) {
+  return execScript(ns, HACK_SCRIPT, threads, false, [target, affectStock, delay])[0];
 }
 
 /**
@@ -194,21 +155,20 @@ function execHack(ns, threads, runners, target, affectStock, delay) {
  * @param {NS} ns 
  * @param {string} target 
  * @param {number} threads 
- * @param {import("@/NetscriptDefinitions.js").Server[]} runners
  * @param {number} delay 
  * @param {number|undefined} reportBackPort 
  * @param {string} dataToSendBack 
- * @returns {{runners: import("@/NetscriptDefinitions.js").Server[], pid: number}}
+ * @returns {number}
  */
-function execWeaken(ns, threads, runners, target, delay, reportBackPort = undefined, dataToSendBack = "") {
+export function execWeaken(ns, threads, target, delay, reportBackPort = undefined, dataToSendBack = "") {
   const args = [target, delay];
   if (reportBackPort) {
     args.push(reportBackPort);
     args.push(dataToSendBack);
   }
-  const execResult = execScript(ns, WEAKEN_SCRIPT, threads, runners, weakenRam, false, args);
+  const execResult = execScript(ns, WEAKEN_SCRIPT, threads, false, args);
 
-  return { runners: execResult.runners, pid: execResult.pids[0] };
+  return execScript(ns, WEAKEN_SCRIPT, threads, false, args)[0];
 }
 
 /**
@@ -216,15 +176,12 @@ function execWeaken(ns, threads, runners, target, delay, reportBackPort = undefi
  * @param {NS} ns 
  * @param {string} target 
  * @param {number} threads 
- * @param {import("@/NetscriptDefinitions.js").Server[]} runners
  * @param {number} delay 
  * @param {boolean} affectStock 
- * @returns {{runners: import("@/NetscriptDefinitions.js").Server[], pid: number}}
+ * @returns {number}
  */
-function execGrow(ns, threads, runners, target, delay, affectStock) {
-  const execResult = execScript(ns, WEAKEN_SCRIPT, threads, runners, weakenRam, false, [target, affectStock, delay]);
-
-  return { runners: execResult.runners, pid: execResult.pids[0] };
+export function execGrow(ns, threads, target, delay, affectStock) {
+  return execScript(ns, GROW_SCRIPT, threads, false, [target, affectStock, delay])[0];
 }
 
 

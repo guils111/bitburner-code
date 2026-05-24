@@ -1,18 +1,29 @@
+import { getBestBatchSize, simulateBatch, simulateMegaBatch } from "./lib/hackingHelper";
 
-import { deepScan, getRunners, getRunnersServer } from "./lib/scanHelper";
-
-
-const WEAKEN_SCRIPT = "/batch/shotgun/weaken.js";
+const BATCHER_SCRIPT = "/continuousBatcher/continuousBatcher.js";
+const PREP_SCRIPT = "/continousBatcher/prepTarget.js"
+const HACK_SCRIPT = "/continuousBatcher/workers/hack.js";
+const WEAKEN_SCRIPT = "/continuousBatcher/workers/weaken.js";
+const GROW_SCRIPT = "/continuousBatcher/workers/grow.js";
 
 /** @param {NS} ns */
 export async function main(ns) {
   ns.clearLog();
   ns.disableLog("ALL");
+  const targetServer = ns.getServer("phantasy");
 
-  deepScan(ns).forEach((a) => {
-    let server = ns.getServer(a);
-    server.hackDifficulty = 1;
-    ns.print(`${a} - Hack analyze security 1: ${ns.hackAnalyze(a)} - Security: ${ns.getServerSecurityLevel(a)} - ${ns.formulas.hacking.hackPercent(server, ns.getPlayer())}`);
-  });
+  const player = ns.getPlayer();
+  
+  ns.print(JSON.stringify(targetServer));
+  //const megabatch = simulateMegaBatch(ns, targetServer, player, HACK_SCRIPT, WEAKEN_SCRIPT, GROW_SCRIPT);
+  //ns.print(JSON.stringify(targetServer));
+  let time = performance.now();
+  const hackThreads = getBestBatchSize(ns, targetServer, player, HACK_SCRIPT, WEAKEN_SCRIPT, GROW_SCRIPT);
+  ns.print(performance.now() - time);
+  //const batch = simulateBatch(ns, targetServer, player, hackThreads);
+  ns.print(JSON.stringify(targetServer));
+
+  
+
 
 }

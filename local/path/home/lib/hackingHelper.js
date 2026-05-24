@@ -1,4 +1,5 @@
-import { getRunners, getRunnersServer } from "./scanHelper";
+import { getHowManyThreadsCanRunNoSplitting } from "./execHelper";
+import { deepScan, getRunners, getTotalAvailableRam } from "./scanHelper";
 
 /**
  * 
@@ -6,7 +7,7 @@ import { getRunners, getRunnersServer } from "./scanHelper";
  * @param {import("@/NetscriptDefinitions").Server} target 
  * @param {import("@/NetscriptDefinitions").Person} player
  * @param {number} threads
- * @returns {{ server: import("@/NetscriptDefinitions").Server, player: import("@/NetscriptDefinitions").Person }}
+ * @returns {{ moneyStolen: number, secIncrease: number, expGained: number }}
  */
 export function simulateHack(ns, target, player, threads = 1) {
     if (!Number.isInteger(threads)) {
@@ -20,7 +21,7 @@ export function simulateHack(ns, target, player, threads = 1) {
     target.moneyAvailable = (target.moneyAvailable ?? 0) - moneyStolen;
     target.hackDifficulty = (target.hackDifficulty ?? 0) + securityIncrease;
     player = addHackingExp(ns, player, hackExp);
-    return { server: target, player };
+    return { moneyStolen: moneyStolen, secIncrease: securityIncrease, expGained: hackExp };
 }
 /**
  * @param {NS} ns 
@@ -113,10 +114,10 @@ export function calculateWeakenThreads(ns, target, cores = 1) {
  */
 export function simulateBatch(ns, target, player, hackThreads, cores = 1) {
 
+
     const startingMoney = target.moneyAvailable ?? 0;
     const startingExp = player.exp.hacking;
 
-    //calculate based on a single hack thread
     let workResult = simulateHack(ns, target, player, hackThreads);
 
     const moneyStolen = startingMoney - (workResult.server.moneyAvailable ?? 0);
@@ -176,15 +177,18 @@ export function simulateMegaBatch(ns, target, player, hackScript, weakenScript, 
 
     const startingHackingSkill = player.skills.hacking;
     let weakenTime = ns.getWeakenTime(target.hostname);
-    const runners = getRunnersServer(ns);
-    let hackThreads = getBestBatchSize(ns, target, player, runners, hackScript, weakenScript, growScript);
+    let hackThreads = getBestBatchSize(ns, target, player, hackScript, weakenScript, growScript);
+    let previousBatchResult = simulateBatch(ns, target, player, hackThreads);
+    const batchThreads = previousBatchResult.hackThreads + previousBatchResult.weakenHackThreads + previousBatchResult.growThreads + previousBatchResult.weakenGrowThreads;
+    const maxBatches = Math.min(weakenTime / 4, getTotalAvailableRam(ns) / (batchThreads * ns.getScriptRam(weakenScript)));
 
-    for (let i = 0; i < weakenTime / 4; i++) {
-        let previousBatchResult = result.length > 0 ? result[i - 1] : { server: target, player: player };
-        result.push(simulateBatch(ns, previousBatchResult.server, previousBatchResult.player, hackThreads))
+    for (let i = 0; i < maxBatches - 1; i++) {
+
+        previousBatchResult = simulateBatch(ns, previousBatchResult.server, previousBatchResult.player, hackThreads);
+        result.push(previousBatchResult);
 
         if (previousBatchResult.player.skills.hacking > startingHackingSkill) {
-            hackThreads = getBestBatchSize(ns, previousBatchResult.server, previousBatchResult.player, runners, hackScript, weakenScript, growScript);
+            hackThreads = getBestBatchSize(ns, previousBatchResult.server, previousBatchResult.player, hackScript, weakenScript, growScript);
             weakenTime = ns.getWeakenTime(target.hostname);
         }
     }
@@ -194,31 +198,32 @@ export function simulateMegaBatch(ns, target, player, hackScript, weakenScript, 
     return result;
 }
 
+
+
 /**
  * 
  * @param {NS} ns 
  * @param {import("@/NetscriptDefinitions").Server} target 
  * @param {import("@/NetscriptDefinitions").Person} player 
- * @param {import("@/NetscriptDefinitions").Server[]} runners
  * @param {string} hackScript 
  * @param {string} weakenScript
  * @param {string} growScript
  * @param {number} cores 
  * @returns {number} ideal number of hack threads to maximize money per thread
  */
-export function getBestBatchSize(ns, target, player, runners, hackScript, weakenScript, growScript, cores = 1) {
+export function getBestBatchSize(ns, target, player, hackScript, weakenScript, growScript, cores = 1) {
     let simulatedTarget = target;
     let simulatedPlayer = player;
-    let hackThreads = 0;
+    let percentStolen = 0.05;
     let bestThreads = 0;
     let bestMoneyPThread = 0;
     while ((simulatedTarget.moneyAvailable ?? 0) > 0) {
-        hackThreads++;
+        const hackThreads = calculateHackThreads(ns, simulatedTarget, simulatedPlayer, percentStolen);
         simulatedPlayer = player;
         simulatedTarget = target;
         const batchResult = simulateBatch(ns, simulatedTarget, simulatedPlayer, hackThreads, cores);
 
-        if (!canBatchRun(ns, hackThreads, batchResult.weakenHackThreads, batchResult.growThreads, batchResult.weakenGrowThreads, hackScript, weakenScript, growScript, runners)) {
+        if (!canBatchRun(ns, hackThreads, batchResult.weakenHackThreads, batchResult.growThreads, batchResult.weakenGrowThreads, hackScript, weakenScript, growScript)) {
             break;
         }
 
@@ -228,6 +233,7 @@ export function getBestBatchSize(ns, target, player, runners, hackScript, weaken
             bestMoneyPThread = moneyPThread;
             bestThreads = hackThreads;
         }
+        percentStolen += 0.05;
     }
     return bestThreads;
 }
@@ -242,12 +248,12 @@ export function getBestBatchSize(ns, target, player, runners, hackScript, weaken
  * @param {string} hackScript 
  * @param {string} weakenScript 
  * @param {string} growScript 
- * @param {import("@/NetscriptDefinitions").Server[]} runners 
  * @returns {boolean}
  */
-export function canBatchRun(ns, hackThreads, weakenHackThreads, growThreads, weakenGrowThreads, hackScript, weakenScript, growScript, runners) {
-    for (let runner of runners) {
-
+export function canBatchRun(ns, hackThreads, weakenHackThreads, growThreads, weakenGrowThreads, hackScript, weakenScript, growScript) {
+    const runners = getRunners(ns);
+    for (let r of runners) {
+        const runner = ns.getServer(r);
         let canRunHack, canRunWeakenHack, canRunGrow, canRunWeakenGrow = false;
 
         if (!canRunHack && runner.maxRam - runner.ramUsed >= hackThreads * ns.getScriptRam(hackScript)) {
@@ -275,14 +281,175 @@ export function canBatchRun(ns, hackThreads, weakenHackThreads, growThreads, wea
     return false;
 }
 
+
+
 /**
  * 
  * @param {NS} ns 
- * @param {string} target 
+ * @param {string|import("@/NetscriptDefinitions").Server} target 
  * @returns {boolean}
  */
 export function isServerPrepared(ns, target) {
-    return (ns.getServerMaxMoney(target) == ns.getServerMoneyAvailable(target) && ns.getServerSecurityLevel(target) <= ns.getServerMinSecurityLevel(target) + 0.01);
+    if (typeof target == "string") {
+        target = ns.getServer(target);
+    }
+    return (target.hackDifficulty ?? 0) <= (target.minDifficulty ?? 0) + 0.01 && (target.moneyAvailable ?? 0) >= (target.moneyMax ?? 0);
+}
+
+/**
+ * 
+ * @param {NS} ns 
+ * @param {import("@/NetscriptDefinitions").Server} target 
+ * @param {import("@/NetscriptDefinitions").Person} player 
+ * @param {string} weakenScript 
+ * @param {string} growScript 
+ * @returns {{
+     * server: import("@/NetscriptDefinitions").Server,
+     * runTime: number
+     * }}
+ */
+export function simulatePrepServer(ns, target, player, weakenScript, growScript) {
+    let runTime = 0;
+
+    while (!isServerPrepared(ns, target)) {
+
+        runTime += ns.formulas.hacking.weakenTime(target, player);
+        const threads = calculatePrepThreads(ns, target, player, weakenScript, growScript);
+        if (threads.growThreads === 0 && threads.weakenThreads === 0) {
+            runTime = Number.POSITIVE_INFINITY;
+            break;
+        }
+        ({ server: target, player: player } = simulateWeaken(ns, target, player, threads.weakenThreads));
+        ({ server: target, player: player } = simulateGrow(ns, target, player, threads.growThreads));
+        ({ server: target, player: player } = simulateWeaken(ns, target, player, threads.weakenGrowThreads));
+
+
+    }
+    if (!isServerPrepared(ns, target)) {
+        ns.print(`WARN - Prep simulation failed on ${target.hostname}. Server is not prepared at the end of the simulation.`);
+    }
+
+    return { server: target, runTime: runTime };
+}
+/**
+ * 
+ * @param {NS} ns 
+ * @param {import("@/NetscriptDefinitions").Server} target 
+ * @param {import("@/NetscriptDefinitions").Person} player 
+ * @param {string} weakenScript 
+ * @param {string} growScript 
+ * @returns {{
+     * weakenThreads: number,
+     * growThreads: number,
+     * weakenGrowThreads: number
+     * }}
+ */
+export function calculatePrepThreads(ns, target, player, weakenScript, growScript) {
+    let weakenThreads, growThreads, weakenGrowThreads = 0;
+    let threadCapacity = getHowManyThreadsCanRunNoSplitting(ns, weakenScript);
+
+
+    weakenThreads = Math.min(calculateWeakenThreads(ns, target), threadCapacity.shift() ?? 0);
+    growThreads = Math.min(growThreads = calculateGrowThreads(ns, target, player, target.moneyMax ?? 0), threadCapacity.shift() ?? 0);
+    let growResult = simulateGrow(ns, target, player, growThreads);
+    weakenGrowThreads = Math.min(calculateWeakenThreads(ns, growResult.server), threadCapacity.shift() ?? 0);
+    growThreads = Math.min(growThreads, Math.floor(weakenGrowThreads * 12.5));
+
+    return { weakenThreads: weakenThreads, growThreads: growThreads, weakenGrowThreads: weakenGrowThreads };
+}
+
+
+/** 
+ * @param {NS} ns 
+ * @param {string} hackScript 
+ * @param {string} growScript 
+ * @param {string} weakenScript 
+ * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
+ * @return {import("@/NetscriptDefinitions").Server} the best target server
+ */
+export function findBestPrepedTarget(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
+    return getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
+        .filter((t) => isServerPrepared(ns, t.target.hostname))
+        .sort((a, b) => b.moneyPSecond - a.moneyPSecond)[0].target;
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {string} hackScript 
+ * @param {string} growScript 
+ * @param {string} weakenScript 
+ * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
+ * @return {import("@/NetscriptDefinitions").Server} the best target server
+ */
+export function findBestUnprepedTarget(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
+    const bestPrepped = getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
+        .filter((t) => isServerPrepared(ns, t.target.hostname))
+        .sort((a, b) => b.moneyPSecond - a.moneyPSecond)[0];
+
+    return getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets)
+        .filter((t) => t.moneyPSecond > bestPrepped.moneyPSecond)
+        .sort((a, b) => (b.target.requiredHackingSkill ?? 0) - (a.target.requiredHackingSkill ?? 0))[0].target;
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {string} hackScript 
+ * @param {string} growScript 
+ * @param {string} weakenScript 
+ * @param {string[]} [possibleTargets=getAllHackTargets(ns)] 
+ * @return {{
+ * target: import("@/NetscriptDefinitions").Server,
+ * moneyPSecond: number
+ * }[]}
+ */
+export function getHackTargetsInfo(ns, hackScript, growScript, weakenScript, possibleTargets = getAllHackTargets(ns)) {
+
+    const runners = getRunners(ns);
+
+    /**
+     * @type {{
+   * target: import("@/NetscriptDefinitions").Server,
+   * moneyPSecond: number,
+   * expPSecond: number,
+   * prepTime: number
+   * }[]}
+     */
+    const result = [];
+    possibleTargets.forEach((targetName) => {
+        let targetServer = ns.getServer(targetName);
+        const player = ns.getPlayer();
+        const prepResult = simulatePrepServer(ns, targetServer, player, weakenScript, growScript);
+        targetServer = prepResult.server;
+        const hackThreads = getBestBatchSize(ns, targetServer, player, hackScript, weakenScript, growScript);
+        const weakenTime = ns.formulas.hacking.weakenTime(targetServer, player);
+        const batchResult = simulateBatch(ns, targetServer, player, hackThreads);
+        const batchThreads = batchResult.hackThreads + batchResult.weakenHackThreads + batchResult.growThreads + batchResult.weakenGrowThreads;
+        const maxBatches = Math.min(weakenTime / 4, getTotalAvailableRam(ns, runners) / (batchThreads * ns.getScriptRam(weakenScript)));
+        const moneyStolen = batchResult.moneyStolen * maxBatches;
+        const expGained = batchResult.expGained;
+        const moneyPSecond = (moneyStolen / (ns.getWeakenTime(targetServer.hostname) / 1000));
+        const expPSecond = (expGained / (ns.getWeakenTime(targetServer.hostname) / 1000));
+        result.push({ target: targetServer, moneyPSecond: moneyPSecond, expPSecond: expPSecond, prepTime: prepResult.runTime });
+
+
+    });
+
+
+    return result;
+}
+
+/**
+ * 
+ * @param {NS} ns
+ * @returns {string[]} 
+ */
+export function getAllHackTargets(ns) {
+    return deepScan(ns).filter((target) => {
+        return !target.includes("hacknet") &&
+            !ns.dnet.isDarknetServer(target) &&
+            ns.hasRootAccess(target) &&
+            ns.getServerMaxMoney(target) > 0;
+    });
 }
 
 /**

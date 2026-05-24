@@ -1,5 +1,5 @@
 import { RAM_RESERVE } from './constants.js';
-import { getRunnersServer } from './scanHelper.js';
+import { getRunners } from './scanHelper.js';
 
 
 
@@ -8,68 +8,103 @@ import { getRunnersServer } from './scanHelper.js';
  * @param {NS} ns 
  * @param {string} script 
  * @param {number} threads 
- * @param {import("@/NetscriptDefinitions.js").Server[]} runners 
- * @param {number} scriptRam 
  * @param {boolean} canSplitThreads 
  * @param {import('@/NetscriptDefinitions.js').ScriptArg[]} [args=[]] 
- * @returns {{runners: import("@/NetscriptDefinitions.js").Server[], pids: number[]}}
+ * @returns {number[]}
  */
-export function execScript(ns, script, threads, runners, scriptRam, canSplitThreads, args = [] ) {
+export function execScript(ns, script, threads, canSplitThreads, args = []) {
+
+    const runners = getRunners(ns);
+    const scriptRam = ns.getScriptRam(script);
+
     /**
      * @type {number[]}
      */
     const pids = [];
     for (const runner of runners) {
         if (threads > 0) {
-            const serverAvailableRam = runner.maxRam - runner.ramUsed;
-            const runnerThreads = Math.min(threads, getHowManyThreadsCanRun(ns, script, [runner], scriptRam));
+            const runnerThreads = Math.min(threads, getHowManyThreadsCanRun(ns, script, [runner]));
             if ((runnerThreads > 0 && canSplitThreads) || (!canSplitThreads && runnerThreads == threads)) {
 
-                //ns.print("Starting ", script, " on ", runner, " with ", runnerThreads, " threads.");
-                let pid = ns.exec(script, runner.hostname, runnerThreads, ...args);
-                runner.ramUsed += scriptRam * runnerThreads;
-                if (pid == 0) {
-                    ns.scp(script, runner.hostname, "home");
-                    pid = ns.exec(script, runner.hostname, runnerThreads, ...args);
+                if (!ns.scp(script, runner, "home")) {
+                    throw new Error(`Could not copy ${script} to ${runner}. Does the script exist? ${ns.fileExists(script, "home")}`);
                 }
-                if(pid > 0) {
+
+                let pid = ns.exec(script, runner, runnerThreads, ...args);
+
+                if (pid > 0) {
                     pids.push(pid);
                     threads -= runnerThreads;
-                    runners[runners.indexOf(runner)].ramUsed += scriptRam*runnerThreads;
                 } else {
-                    ns.print(`ERROR - Script execution failed. ${JSON.stringify({script, threads, runners, scriptRam, canSplitThreads, args})}`);
+                    ns.print(`ERROR - Script execution failed. ${JSON.stringify({ script, threads, runnersLength: runners.length, scriptRam, canSplitThreads, args })}`);
                     ns.ui.openTail();
                     throw new Error(`Script execution failed. Check logs.`);
                 }
-                
             }
         } else {
             break;
         }
     }
     if (threads > 0) {
-        ns.print("ERROR - Not enough RAM. Could not run ", script, " with ", threads, " threads.");
+        ns.print("WARN - Not enough RAM. Could not run ", script, " with ", threads, " threads.");
         ns.ui.openTail();
     }
-    return {runners, pids: pids};
+    if (pids.length === 0) {
+        pids.push(0);
+    }
+    return pids;
 }
 
 
 /**
  * @param {NS} ns 
  * @param {string} script 
- * @param {import("@/NetscriptDefinitions.js").Server[]} runners 
+ * @param {string[]} runners 
  * @param {number} [scriptRam=ns.getScriptRam(script)] 
  * @returns {number}
  */
-export function getHowManyThreadsCanRun(ns, script, runners = getRunnersServer(ns), scriptRam = ns.getScriptRam(script, "home")) {
+export function getHowManyThreadsCanRun(ns, script, runners = getRunners(ns), scriptRam = ns.getScriptRam(script, "home")) {
     let threads = 0;
     runners.forEach((server) => {
-        var serverAvailableRam = server.maxRam - server.ramUsed;
-        if (server.hostname == "home") {
+        let serverAvailableRam = getAvailableRam(ns, server);
+        if (server == "home") {
             serverAvailableRam -= RAM_RESERVE;
         }
         threads += Math.floor(serverAvailableRam / scriptRam);
     });
     return threads;
 }
+
+/**
+ * 
+ * @param {NS} ns 
+ * @param {string} server 
+ * @returns {number}
+ */
+export function getAvailableRam(ns, server) {
+    return ns.getServerMaxRam(server) - ns.getServerUsedRam(server);
+}
+
+/**
+ * @param {NS} ns 
+ * @param {string} script 
+ * @returns {number[]}
+ */
+export function getHowManyThreadsCanRunNoSplitting(ns, script) {
+    const runners = getRunners(ns);
+    const scriptRam = ns.getScriptRam(script);
+    /**
+     * @type {number[]}
+     */
+    const threads = [];
+    runners.forEach((server) => {
+        let serverAvailableRam = getAvailableRam(ns, server);
+        if (server == "home") {
+            serverAvailableRam -= RAM_RESERVE;
+        }
+        threads.push(Math.floor(serverAvailableRam / scriptRam));
+    });
+    return threads.sort((a, b) => b - a);
+}
+
+
