@@ -23,7 +23,7 @@ export function execScript(ns, script, threads, canSplitThreads, args = []) {
     const pids = [];
     for (const runner of runners) {
         if (threads > 0) {
-            const runnerThreads = Math.min(threads, getHowManyThreadsCanRun(ns, script, [runner]));
+            const runnerThreads = Math.min(threads, Math.floor(getAvailableRam(ns, runner)/scriptRam));
             if ((runnerThreads > 0 && canSplitThreads) || (!canSplitThreads && runnerThreads == threads)) {
 
                 if (!ns.scp(script, runner, "home")) {

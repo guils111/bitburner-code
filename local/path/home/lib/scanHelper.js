@@ -1,10 +1,12 @@
 const DEFAULT_DEEP_SCAN_CACHE_TTL_MS = 5000;
 const deepScanCache = new Map();
+const DEFAULT_RUNNERS_CACHE_TTL_MS = 5000;
+const runnersCache = new Map();
 
 /**
  * @param {NS} ns
  * @param {string} [root="home"]
- * @param {number} [ttlMs=1000]
+ * @param {number} [ttlMs=5000]
  * @return {string[]} list of all servers found
  */
 export function deepScan(ns, root = "home", ttlMs = DEFAULT_DEEP_SCAN_CACHE_TTL_MS) {
@@ -34,9 +36,22 @@ export function deepScan(ns, root = "home", ttlMs = DEFAULT_DEEP_SCAN_CACHE_TTL_
 export function clearDeepScanCache(root = undefined) {
   if (typeof root === "string") {
     deepScanCache.delete(root);
+    runnersCache.delete("default");
     return;
   }
   deepScanCache.clear();
+  runnersCache.clear();
+}
+
+/**
+ * @param {string | undefined} [cacheKey]
+ */
+export function clearRunnersCache(cacheKey = undefined) {
+  if (typeof cacheKey === "string") {
+    runnersCache.delete(cacheKey);
+    return;
+  }
+  runnersCache.clear();
 }
 
 /** 
@@ -92,12 +107,26 @@ export function getPathToServer(ns, target) {
 }
 
 /** @param {NS} ns */
-export function getRunners(ns) {
-  var runners = deepScan(ns).filter((a) => {
+export function getRunners(ns, ttlMs = DEFAULT_RUNNERS_CACHE_TTL_MS) {
+  const now = Date.now();
+  if (ttlMs > 0) {
+    const cached = runnersCache.get("default");
+    if (cached && cached.expiresAt > now) {
+      return [...cached.runners];
+    }
+  }
+
+  const runners = deepScan(ns).filter((a) => {
     return !a.includes("hacknet") && ns.hasRootAccess(a) && ns.getServerMaxRam(a) > 0;
-  });
+  }).sort((a, b) => ns.getServerMaxRam(b) - ns.getServerMaxRam(a));
   runners.push("home");
-  return runners;
+  if (ttlMs > 0) {
+    runnersCache.set("default", {
+      expiresAt: now + ttlMs,
+      runners,
+    });
+  }
+  return [...runners];
 }
 
 /**

@@ -2,11 +2,12 @@ import { execScript } from "../lib/execHelper";
 import { isServerPrepared, simulateMegaBatch } from "../lib/hackingHelper";
 import { getRunners } from "../lib/scanHelper";
 
-const HACK_SCRIPT = "/continousBatcher/workers/hack.js";
-const WEAKEN_SCRIPT = "/continousBatcher/workers/weaken.js";
-const GROW_SCRIPT = "/continousBatcher/workers/grow.js";
+const HACK_SCRIPT = "continousBatcher/workers/hack.js";
+const WEAKEN_SCRIPT = "continousBatcher/workers/weaken.js";
+const GROW_SCRIPT = "continousBatcher/workers/grow.js";
 let managerPort = 0;
 let targetName = "";
+let maxRam = 0;
 
 /**
  * 
@@ -16,6 +17,7 @@ function init(ns) {
   ns.clearPort(ns.self().pid);
   targetName = ns.args[0]?.toString();
   managerPort = Number.parseInt(ns.args[1]?.toString());
+  maxRam = Number.parseInt(ns.args[2]?.toString());
   ns.atExit(() => abort(ns));
   ns.ui.openTail();
 }
@@ -26,7 +28,7 @@ export async function main(ns) {
   ns.disableLog("ALL");
   init(ns);
   ns.print(`INFO - Starting continous batch against ${targetName}`);
-  launchBatches(ns);
+  await launchBatches(ns);
   await keepBatchesRunning(ns);
 
 }
@@ -40,16 +42,21 @@ async function keepBatchesRunning(ns) {
 
   while (true) {
     await ns.nextPortWrite(batchPort);
-
+    const portData = ns.readPort(batchPort);
+    ns.print(`DEBUG - Port data received: ${portData}`);
+    if (portData !== ns.getHackingLevel()) {
+      ns.print(`WARN - Expected hacking to be ${portData} but was ${ns.getHackingLevel()}.`);
+    }
     if (!isServerPrepared(ns, targetName)) {
       const secAboveMin = ns.getServerSecurityLevel(targetName) - ns.getServerMinSecurityLevel(targetName);
       const moneyPercent = (ns.getServerMoneyAvailable(targetName) / ns.getServerMaxMoney(targetName)) * 100;
       ns.print(`ERROR - Server ${targetName} is not prepared. Sec above min ${secAboveMin}, money at ${ns.format.percent(moneyPercent, 0)}`);
       ns.exit();
     }
+    ns.writePort(managerPort, `batchDone:${targetName}`);
 
-    launchBatches(ns);
-
+    await launchBatches(ns);
+ 
   }
 }
 
@@ -60,18 +67,22 @@ async function keepBatchesRunning(ns) {
 function abort(ns) {
   ns.print(`WARN - Aborting this script. Killing all scripts that have args[0] = ${targetName}.`)
   getRunners(ns).forEach((runner) => {
-    ns.ps(runner).filter((p) => p.args.length > 0 && p.args[0] === targetName && p.filename !== ns.getScriptName()).forEach((p) => {
+    ns.ps(runner).filter((p) => {
+      return p.args.length > 0
+        && p.args[0] === targetName
+        && (p.filename === HACK_SCRIPT || p.filename === WEAKEN_SCRIPT || p.filename === GROW_SCRIPT)
+    }).forEach((p) => {
       ns.kill(p.pid);
     })
   })
-  ns.writePort(managerPort, `abort: ${targetName}`);
+
   ns.ui.openTail();
 }
 
 /**
  * 
  * @param {NS} ns 
- * @returns {{ 
+ * @returns {Promise<{ 
  * server: import("@/NetscriptDefinitions").Server, 
  * player: import("@/NetscriptDefinitions").Person, 
  * moneyStolen: number, 
@@ -79,28 +90,54 @@ function abort(ns) {
  * weakenHackThreads: number, 
  * growThreads: number, 
  * weakenGrowThreads: number, 
- * expGained: number }}
+ * expGained: number }>}
  */
-function launchBatches(ns) {
+async function launchBatches(ns) {
   ns.print(`INFO - Launching batches.`)
   const player = ns.getPlayer();
   const server = ns.getServer(targetName);
 
   const megaBatch = simulateMegaBatch(ns, server, player, HACK_SCRIPT, WEAKEN_SCRIPT, GROW_SCRIPT);
-  ns.print(`INFO - Predicted a mega batch of ${megaBatch.length} batches against ${targetName}`);
+  ns.print(`INFO - Predicted a mega batch of ${megaBatch.length} batches against ${targetName} that will take ${ns.format.time(ns.getWeakenTime(targetName))} to run.`);
+
+
+  // DEBUG
+  
+
+
+  // DEBUG END
+
+
   const reportBackPort = ns.self().pid;
   const weakenTime = ns.getWeakenTime(targetName);
   const growTime = ns.getGrowTime(targetName);
   const hackTime = ns.getHackTime(targetName);
   let lastPid = 0;
+  let time = performance.now();
+  let batchCount = 0;
+  const performanceTime = performance.now();
   for (const batch of megaBatch) {
     lastPid = executeBatch(ns, batch, weakenTime, growTime, hackTime)
     if (lastPid <= 0) {
       break;
     }
+    if (performance.now() - time > 200) {
+      //await ns.sleep(0);
+      time = performance.now();
+    }
+    batchCount++;
+    //if(batchCount >= 1000) break;
   }
-  ns.kill(lastPid);
-  execWeaken(ns, megaBatch[megaBatch.length - 1].weakenGrowThreads, targetName, 0, reportBackPort, megaBatch[megaBatch.length - 1].player.skills.hacking.toString());
+  if (batchCount > 0) {
+    ns.kill(lastPid);
+    const lastBatch = megaBatch[batchCount - 1];
+    execWeaken(ns, lastBatch.weakenGrowThreads, targetName, weakenTime - lastBatch.weakenTime, reportBackPort, lastBatch.player.skills.hacking.toString());
+    ns.print(`INFO - Launched ${batchCount}/${megaBatch.length} batches in ${ns.format.number(performance.now() - performanceTime, 2, 10000000)} ms, waiting for the last one to finish. First batch will finish in ${ns.format.time(ns.getWeakenTime(targetName))}`);
+  } else {
+    ns.print(`ERROR - Could not launch any batch against ${targetName}. Aborting.`);
+    ns.writePort(managerPort, `abort: ${targetName}`);
+    ns.exit();
+  }
 
   return megaBatch[megaBatch.length - 1];
 }
@@ -113,22 +150,21 @@ function launchBatches(ns) {
  * weakenHackThreads: number, 
  * growThreads: number, 
  * weakenGrowThreads: number, 
- * player: import("@/NetscriptDefinitions.js").Person}} batch
+ * player: import("@/NetscriptDefinitions.js").Person,
+ * weakenTime: number}} batch
  * @param {number} weakenTime
  * @param {number} growTime
  * @param {number} hackTime
  * @returns {number}
  */
 function executeBatch(ns, batch, weakenTime, growTime, hackTime) {
-  ns.print(`INFO - Executing batch against ${targetName}. ${JSON.stringify(batch)}`);
   let hackPid = execHack(ns, batch.hackThreads, targetName, false, weakenTime - hackTime);
-
   let weakenHackPid = execWeaken(ns, batch.weakenHackThreads, targetName, 0);
   let growPid = execGrow(ns, batch.growThreads, targetName, weakenTime - growTime, false);
   let weakenGrowPid = execWeaken(ns, batch.weakenGrowThreads, targetName, 0);
 
   if (hackPid <= 0 || weakenHackPid <= 0 || growPid <= 0 || weakenGrowPid <= 0) {
-    ns.print(`WARN - Batch could not be executed fully. Killing this batch. ${JSON.stringify({hackPid, weakenHackPid, growPid, weakenGrowPid})}`);
+    ns.print(`WARN - Batch could not be executed fully. Killing this batch. ${JSON.stringify({ hackPid, weakenHackPid, growPid, weakenGrowPid })}`);
     ns.kill(hackPid);
     ns.kill(weakenHackPid);
     ns.kill(growPid);
@@ -166,7 +202,6 @@ export function execWeaken(ns, threads, target, delay, reportBackPort = undefine
     args.push(reportBackPort);
     args.push(dataToSendBack);
   }
-  const execResult = execScript(ns, WEAKEN_SCRIPT, threads, false, args);
 
   return execScript(ns, WEAKEN_SCRIPT, threads, false, args)[0];
 }
