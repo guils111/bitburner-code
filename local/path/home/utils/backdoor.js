@@ -1,4 +1,4 @@
-import { getPathToServer } from "./lib/scanHelper.js";
+import { getPathToServer } from "../lib/scanHelper.js";
 
 /** @param {NS} ns */
 export async function main(ns) {

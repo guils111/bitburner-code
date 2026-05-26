@@ -1,85 +1,110 @@
+import { RAM_RESERVE } from './constants.js';
 import { getRunners } from './scanHelper.js';
 
 
 
-/** 
- * @param {NS} ns 
- * @param {string[]} runners
- * @param {string} script
- * @param {number || undefined} threads
- * @param {string || undefined} target
- * @param {number || undefined} delay
+/**
  * 
-*/
-export function execScript(ns, script, threads = 1, target = "", delay = 0, runners = getRunners(ns)) {
-    if (typeof ns != "object" || typeof ns.getServerMaxRam != "function") {
-        throw new Error(`ns is not of type NS: ${typeof ns}`);
-    }
-    if (typeof script != "string") {
-        throw new Error(`script is not a string: ${script}`);
-    }
-    if (typeof threads != "number" && typeof threads != "undefined") {
-        throw new Error(`threads is not a number or undefined: ${threads}`);
-    }
-    if (typeof target != "string" && typeof target != "undefined") {
-        throw new Error(`target is not a string or undefined: ${target}`);
-    }
-    if (typeof delay != "number" && typeof delay != "undefined") {
-        throw new Error(`delay is not a number or undefined: ${delay}`);
-    }
-    if (!Array.isArray(runners)) {
-        throw new Error(`runners is not an array: ${runners}`);
-    }
-    for (var runner of runners) {
-        if (threads > 0) {
-            var serverAvailableRam = ns.getServerMaxRam(runner) - ns.getServerUsedRam(runner);
-            if (runner == "home") {
-                serverAvailableRam -= RAM_RESERVE;
-            }
-            var runnerThreads = Math.min(threads, getHowManyThreadsCanRun(ns, script, [runner]));
-            if (runnerThreads > 0) {
+ * @param {NS} ns 
+ * @param {string} script 
+ * @param {number} threads 
+ * @param {boolean} canSplitThreads 
+ * @param {import('@/NetscriptDefinitions.js').ScriptArg[]} [args=[]] 
+ * @returns {number[]}
+ */
+export function execScript(ns, script, threads, canSplitThreads, args = []) {
 
-                //ns.print("Starting ", script, " on ", runner, " with ", runnerThreads, " threads.");
-                var pid = ns.exec(script, runner, runnerThreads, target, delay);
-                if (pid == 0) {
-                    ns.scp(script, runner, "home");
-                    pid = ns.exec(script, runner, runnerThreads, target, delay);
+    const runners = getRunners(ns);
+    const scriptRam = ns.getScriptRam(script);
+
+    /**
+     * @type {number[]}
+     */
+    const pids = [];
+    for (const runner of runners) {
+        if (threads > 0) {
+            const runnerThreads = Math.min(threads, Math.floor(getAvailableRam(ns, runner)/scriptRam));
+            if ((runnerThreads > 0 && canSplitThreads) || (!canSplitThreads && runnerThreads == threads)) {
+
+                if (!ns.scp(script, runner, "home")) {
+                    throw new Error(`Could not copy ${script} to ${runner}. Does the script exist? ${ns.fileExists(script, "home")}`);
                 }
-                threads -= runnerThreads;
+
+                let pid = ns.exec(script, runner, runnerThreads, ...args);
+
+                if (pid > 0) {
+                    pids.push(pid);
+                    threads -= runnerThreads;
+                } else {
+                    ns.print(`ERROR - Script execution failed. ${JSON.stringify({ script, threads, runnersLength: runners.length, scriptRam, canSplitThreads, args })}`);
+                    ns.ui.openTail();
+                    throw new Error(`Script execution failed. Check logs.`);
+                }
             }
         } else {
             break;
         }
     }
     if (threads > 0) {
-        ns.print("Not enough RAM. Could not run ", script, " with ", threads, " threads.");
+        ns.print("WARN - Not enough RAM. Could not run ", script, " with ", threads, " threads.");
+        ns.ui.openTail();
     }
-    return threads;
+    if (pids.length === 0) {
+        pids.push(0);
+    }
+    return pids;
 }
+
 
 /**
  * @param {NS} ns 
  * @param {string} script 
  * @param {string[]} runners 
+ * @param {number} [scriptRam=ns.getScriptRam(script)] 
  * @returns {number}
  */
-export function getHowManyThreadsCanRun(ns, script, runners = getRunners(ns)) {
-    if (typeof ns != "object" || typeof ns.getServerMaxRam != "function") {
-        throw new Error(`ns is not of type NS: ${typeof ns}`);
-    }
-    if (typeof script != "string") {
-        throw new Error(`script is not a string: ${script}`);
-    }
-    if (!Array.isArray(runners)) {
-        throw new Error(`runners is not an array: ${runners}`);
-    }
-    var threads = 0;
-    runners.forEach((a) => {
-        var serverAvailableRam = ns.getServerMaxRam(a) - ns.getServerUsedRam(a);
-        if (a == "home") {
+export function getHowManyThreadsCanRun(ns, script, runners = getRunners(ns), scriptRam = ns.getScriptRam(script, "home")) {
+    let threads = 0;
+    runners.forEach((server) => {
+        let serverAvailableRam = getAvailableRam(ns, server);
+        if (server == "home") {
             serverAvailableRam -= RAM_RESERVE;
         }
-        threads += Math.floor(serverAvailableRam / ns.getScriptRam(script, "home"));
+        threads += Math.floor(serverAvailableRam / scriptRam);
     });
     return threads;
 }
+
+/**
+ * 
+ * @param {NS} ns 
+ * @param {string} server 
+ * @returns {number}
+ */
+export function getAvailableRam(ns, server) {
+    return ns.getServerMaxRam(server) - ns.getServerUsedRam(server);
+}
+
+/**
+ * @param {NS} ns 
+ * @param {string} script 
+ * @returns {number[]}
+ */
+export function getHowManyThreadsCanRunNoSplitting(ns, script) {
+    const runners = getRunners(ns);
+    const scriptRam = ns.getScriptRam(script);
+    /**
+     * @type {number[]}
+     */
+    const threads = [];
+    runners.forEach((server) => {
+        let serverAvailableRam = getAvailableRam(ns, server);
+        if (server == "home") {
+            serverAvailableRam -= RAM_RESERVE;
+        }
+        threads.push(Math.floor(serverAvailableRam / scriptRam));
+    });
+    return threads.sort((a, b) => b - a);
+}
+
+
