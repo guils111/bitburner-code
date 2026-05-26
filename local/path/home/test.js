@@ -12,24 +12,16 @@ const GROW_SCRIPT = "/continousBatcher/workers/grow.js";
 export async function main(ns) {
   ns.clearLog();
   ns.disableLog("ALL");
-  const prepedServer = ns.getServer("phantasy");
-  const unprepedServer = ns.getServer("joesguns");
-  const target = findBestPrepedTarget(ns, HACK_SCRIPT, GROW_SCRIPT, WEAKEN_SCRIPT);
-  const player = ns.getPlayer();
-  let time = performance.now();
-  const megaBatch = simulateMegaBatch(ns, prepedServer, player, HACK_SCRIPT, WEAKEN_SCRIPT, GROW_SCRIPT);
-  time = performance.now() - time;
-  ns.print(`Time taken: ${time} ms`);
 
-  for (const batch of megaBatch) {
-    
-    const hackPercent = ns.hackAnalyze(target.hostname) * batch.hackThreads;
-    const growThreadsDifference = Math.ceil(ns.growthAnalyze(target.hostname, 1 / (1 - hackPercent))) - batch.growThreads;
+  ns.ui.resizeTail(481, 170);
+  ns.ui.moveTail(1867, 1);
 
-    if(growThreadsDifference > 0) {
-      ns.print(JSON.stringify(batch));
-      break;
-    }
-
+  ns.atExit(() => {
+    ns.print(`Window size: ${ns.ui.windowSize()}.`);
+  });
+  
+  while(true) {
+    await ns.sleep(10000);
   }
+
 }

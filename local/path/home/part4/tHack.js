@@ -11,7 +11,7 @@ export async function main(ns) {
 	let tDelay = 0;
 	let delay = job.end - job.time - Date.now();
 	if (delay < 0) {
-		ns.tprint(`WARN: Batch ${job.batch} ${job.type} was ${-delay}ms late. (${job.end})\n`);
+		//ns.tprint(`WARN: Batch ${job.batch} ${job.type} was ${-delay}ms late. (${job.end})\n`);
 		tDelay = -delay
 		delay = 0;
 	}

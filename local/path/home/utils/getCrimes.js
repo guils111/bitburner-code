@@ -2,18 +2,12 @@
  * @param {NS} ns
  */
 export async function main(ns) {
-    var locations = ns.infiltration.getPossibleLocations();
-    var infiltrations = [];
-    for (var location of locations) {
-        var infiltration = ns.infiltration.getInfiltration(location.name);
-        if (infiltration != null) {
-            infiltrations.push(infiltration);
-        }
-    }
-    infiltrations.sort((a, b) => a.difficulty - b.difficulty);
-    var result = "Infiltrations: \n";
-    for (var infiltration of infiltrations) {
-        result += ` - ${infiltration.location.city.padEnd(15)} - ${infiltration.location.name.padEnd(30)}: ${Math.floor(infiltration.difficulty*30).toString().padEnd(5)} difficulty - ${Math.floor(infiltration.reward.tradeRep/infiltration.maxClearanceLevel).toString().padEnd(5)} trade reputation per clearance.\n`;
+    const crimes = Object.entries(ns.enums.CrimeType);
+    let result = "Crime gains:\n";
+    for(const crime of crimes) {
+        result += crime[1].padEnd(20);
+        result += `| Money/completion: $${ns.format.number(ns.formulas.work.crimeGains(ns.getPlayer(), crime[1]).money*ns.formulas.work.crimeSuccessChance(ns.getPlayer(), crime[1]))}`;
+        result += "\n";
     }
     ns.tprint(result);
 

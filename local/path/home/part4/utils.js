@@ -204,8 +204,8 @@ export function getServers(ns, lambdaCondition = () => true, hostname = "home", 
 // Here are a couple of my own getServers modules.
 // This one finds the best target for hacking. It tries to balance expected return with time taken.
 /** @param {NS} ns */
-export function checkTarget(ns, server, target = "n00dles", forms = false) {
-	if (!ns.hasRootAccess(server) || !isPrepped(ns, server)) return target;
+export function checkTarget(ns, server, target, forms = false, prepped = true) {
+	if (!ns.hasRootAccess(server) || isPrepped(ns, server) !== prepped) return target;
 	const player = ns.getPlayer();
 	const serverSim = ns.getServer(server);
 	const pSim = ns.getServer(target);
@@ -263,7 +263,10 @@ export function isPrepped(ns, server) {
 	I don't make any guarantees, but I've been using it and it's worked well enough. I'll comment it anyway.
 	The prep strategy uses a modified proto-batching technique, which will be covered in part 2.
 */
-/** @param {NS} ns */
+/** 
+ * @param {NS} ns 
+ * @param {import("@/NetscriptDefinitions").NetscriptPort} managerPort 
+ */
 export async function prep(ns, values, ramNet) {
 	const maxMoney = values.maxMoney;
 	const minSec = values.minSec;
@@ -405,6 +408,7 @@ export async function prep(ns, values, ramNet) {
 		money = ns.getServerMoneyAvailable(values.target);
 		sec = ns.getServerSecurityLevel(values.target);
 	}
+	
 	return true;
 }
 

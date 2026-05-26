@@ -6,3 +6,5 @@ export const SOLVE_CONTRACTS_SCRIPT = "/contracts/solveContracts.js";
 export const MAX_BATCHS = 100000;
 export const IS_SHARE_ENABLED_ON_WAIT = false;
 export const DELAY_BETWEEN_TARGET_SWITCH = 10 * 60 * 1000;
+export const PREP_RUNNERS = ["cloudServer"];
+export const RESERVED_RUNNERS = [...PREP_RUNNERS];

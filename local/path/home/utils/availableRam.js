@@ -2,9 +2,9 @@
 export async function main(ns) {
   var availableRam = 0;
   for (var server of getRunners(ns)) {
-    availableRam += ns.getServerMaxRam(server) - ns.getServerUsedRam(server);
+    availableRam += ns.getServerMaxRam(server);// - ns.getServerUsedRam(server);
   }
-  ns.tprint(`${availableRam} GB available across all servers.`);
+  ns.tprint(`${ns.format.ram(availableRam)} available across all servers.`);
 }
 
 /** @param {NS} ns */

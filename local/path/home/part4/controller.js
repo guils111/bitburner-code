@@ -15,11 +15,12 @@ as we can make them.
 */
 
 // One new utility. A custom data structure for managing our schedule. You can see the details in utils.js
+import { PREP_RUNNERS, RESERVED_RUNNERS } from "../lib/constants.js";
 import { getServers, copyScripts, checkTarget, isPrepped, prep, Deque } from "./utils.js";
 
 const TYPES = ["hack", "weaken1", "grow", "weaken2"];
-const WORKERS = ["/part4/tHack.js", "/part4/tWeaken.js", "/part4/tGrow.js"];
-const SCRIPTS = { hack: "/part4/tHack.js", weaken1: "/part4/tWeaken.js", grow: "/part4/tGrow.js", weaken2: "/part4/tWeaken.js" };
+const WORKERS = ["part4/tHack.js", "part4/tWeaken.js", "part4/tGrow.js"];
+const SCRIPTS = { hack: "part4/tHack.js", weaken1: "part4/tWeaken.js", grow: "part4/tGrow.js", weaken2: "part4/tWeaken.js" };
 const COSTS = { hack: 1.7, weaken1: 1.75, grow: 1.75, weaken2: 1.75 };
 // const OFFSETS = { hack: 0, weaken1: 1, grow: 2, weaken2: 3 };
 
@@ -42,7 +43,7 @@ class ContinuousBatcher {
 
 	// A capital M Map. We'll use this to keep track of active jobs.
 	#running = new Map();
-	
+
 	/**
 	 * @param {import("../../../../NetscriptDefinitions.js").NS} ns
 	 * @param {Metrics} metrics
@@ -212,24 +213,42 @@ export async function main(ns) {
 	*/
 	// if (ns.isRunning("/part4/logHelper.js", "home")) ns.kill("/part4/logHelper.js", "home");
 	// const logPort = ns.exec("/part4/logHelper.js", "home");
-	// ns.atExit(() => ns.closeTail(logPort));
+	ns.atExit(() => ns.ui.closeTail(), "closeTail");
+
 
 	// Setup is mostly the same.
 	const dataPort = ns.getPortHandle(ns.pid);
 	dataPort.clear();
 	let target = ns.args[0] ? ns.args[0].toString() : "n00dles";
+	const isPrep = ns.args[1];
+	const managerPort = ns.args[2] ? ns.getPortHandle(Number.parseInt(ns.args[2].toString())) : undefined;
+	if (isPrep) {
+		ns.ui.setTailTitle("Prepping " + target);
+		ns.ui.resizeTail(481, 170);
+		ns.ui.moveTail(1867, 1);
+	} else {
+		ns.ui.setTailTitle("Farming " + target);
+		ns.ui.resizeTail(481, 211);
+		ns.ui.moveTail(1867, 175);
+	}
+
 	while (true) {
 		//@ts-ignore
-		const servers = getServers(ns, (server) => {
+		const servers = isPrep && PREP_RUNNERS.includes(ns.getHostname()) ? PREP_RUNNERS : getServers(ns, (server) => {
 			//@ts-ignore
 			if (!ns.args[0]) target = checkTarget(ns, server, target, ns.fileExists("Formulas.exe", "home"));
 			copyScripts(ns, server, WORKERS, true);
+			if (RESERVED_RUNNERS.includes(server)) return false;
 			return ns.hasRootAccess(server);
 		});
 		const ramNet = new RamNet(ns, servers);
 		const metrics = new Metrics(ns, target);
 		// metrics.log = logPort; // Uncomment for -LOGGING.
 		if (!isPrepped(ns, target)) await prep(ns, metrics, ramNet);
+		if (isPrep) {
+			managerPort.write(`prepDone:${target}`);
+			ns.exit();
+		}
 		ns.clearLog();
 		ns.print("Optimizing. This may take a few seconds...");
 

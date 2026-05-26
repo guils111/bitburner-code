@@ -13,7 +13,7 @@ export async function main(ns) {
 
 	// Don't report delay right away.
 	if (delay < 0) {
-		ns.tprint(`WARN: Batch ${job.batch} ${job.type} was ${-delay}ms late. (${job.end})\n`);
+		//ns.tprint(`WARN: Batch ${job.batch} ${job.type} was ${-delay}ms late. (${job.end})\n`);
 		tDelay = -delay
 		delay = 0;
 	}
