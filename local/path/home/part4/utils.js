@@ -204,8 +204,8 @@ export function getServers(ns, lambdaCondition = () => true, hostname = "home", 
 // Here are a couple of my own getServers modules.
 // This one finds the best target for hacking. It tries to balance expected return with time taken.
 /** @param {NS} ns */
-export function checkTarget(ns, server, target, forms = false, prepped = true) {
-	if (!ns.hasRootAccess(server) || isPrepped(ns, server) !== prepped) return target;
+export function checkTarget(ns, server, target, forms = false, prepped = true, prevTarget = null) {
+	if (!ns.hasRootAccess(server) || server === prevTarget || isPrepped(ns, server) !== prepped) return target;
 	const player = ns.getPlayer();
 	const serverSim = ns.getServer(server);
 	const pSim = ns.getServer(target);
@@ -216,7 +216,7 @@ export function checkTarget(ns, server, target, forms = false, prepped = true) {
 			serverSim.hackDifficulty = serverSim.minDifficulty;
 			pSim.hackDifficulty = pSim.minDifficulty;
 			previousScore = pSim.moneyMax / ns.formulas.hacking.weakenTime(pSim, player) * ns.formulas.hacking.hackChance(pSim, player);
-			currentScore = serverSim.moneyMax / ns.formulas.hacking.weakenTime(serverSim, player) * ns.formulas.hacking.hackChance(serverSim, player);
+			currentScore = serverSim.moneyMax / ns.formulas.hacking.weakenTime(serverSim, player) * ns.formulas.hacking.hackChance(serverSim, player) * (isPrepped(ns, server) === prepped ? 1 : 0);
 		} else {
 			const weight = (serv) => {
 				// Calculate the difference between max and available money
@@ -267,7 +267,7 @@ export function isPrepped(ns, server) {
  * @param {NS} ns 
  * @param {import("@/NetscriptDefinitions").NetscriptPort} managerPort 
  */
-export async function prep(ns, values, ramNet) {
+export async function prep(ns, values, ramNet, managerPort) {
 	const maxMoney = values.maxMoney;
 	const minSec = values.minSec;
 	let money = values.money;
@@ -395,6 +395,10 @@ export async function prep(ns, values, ramNet) {
 			ns.print(`Security: +${ns.format.number(sec - minSec, 3)}`);
 			ns.print(`Money: \$${ns.format.number(money, 2)}/${ns.format.number(maxMoney, 2)}`);
 			const time = tEnd - Date.now();
+			if (time < -10000) {
+				managerPort.write("prepFailed");
+				ns.kill(ns.pid);
+			}
 			ns.print(`Estimated time remaining: ${ns.format.time(time)}`);
 			ns.print(`~${batchCount} ${(batchCount === 1) ? "batch" : "batches"}.`);
 		}, 200);
@@ -408,7 +412,7 @@ export async function prep(ns, values, ramNet) {
 		money = ns.getServerMoneyAvailable(values.target);
 		sec = ns.getServerSecurityLevel(values.target);
 	}
-	
+
 	return true;
 }
 

@@ -3,6 +3,7 @@ export const RAM_RESERVE = 0;
 export const NUKE_SCRIPT = "/workers/nuke.js";
 export const PURCHASE_SERVER_SCRIPT = "/workers/purchaseServer.js";
 export const SOLVE_CONTRACTS_SCRIPT = "/contracts/solveContracts.js";
+export const GANG_MANAGER_SCRIPT = "/gang/gangManager.js";
 export const MAX_BATCHS = 100000;
 export const IS_SHARE_ENABLED_ON_WAIT = false;
 export const DELAY_BETWEEN_TARGET_SWITCH = 10 * 60 * 1000;
