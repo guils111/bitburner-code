@@ -204,7 +204,7 @@ export function getServers(ns, lambdaCondition = () => true, hostname = "home", 
 // Here are a couple of my own getServers modules.
 // This one finds the best target for hacking. It tries to balance expected return with time taken.
 /** @param {NS} ns */
-export function checkTarget(ns, server, target, forms = false, prepped = true, prevTarget = null) {
+export function checkTarget(ns, server, target = "n00dles", forms = false, prepped = true, prevTarget = null) {
 	if (!ns.hasRootAccess(server) || server === prevTarget || isPrepped(ns, server) !== prepped) return target;
 	const player = ns.getPlayer();
 	const serverSim = ns.getServer(server);

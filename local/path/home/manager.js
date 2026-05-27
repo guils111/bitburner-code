@@ -83,13 +83,17 @@ export async function main(ns) {
             if (!target) {
                 runners.push("home");
             }
-            prevPrepTarget = prepTarget;
-            prepPid = ns.exec(BATCH_SCRIPT, runners.find(r => ns.serverExists(r) && ns.getServerMaxRam(r) >= ns.getScriptRam(BATCH_SCRIPT) * 2), 1, ...[prepTarget, true, managerPort]);
-            if (prepPid === 0) {
-                ns.print(`ERROR - Prep script failed to start. Check logs. ${JSON.stringify({ prepTarget, prepPid })}`);
-                ns.ui.openTail();
-                throw new Error("Prep script failed to start.");
+            const runner = runners.find(r => ns.serverExists(r) && ns.getServerMaxRam(r) >= ns.getScriptRam(BATCH_SCRIPT) * 2);
+            if (runner) {
+                prevPrepTarget = prepTarget;
+                prepPid = ns.exec(BATCH_SCRIPT, runners.find(r => ns.serverExists(r) && ns.getServerMaxRam(r) >= ns.getScriptRam(BATCH_SCRIPT) * 2), 1, ...[prepTarget, true, managerPort]);
+                if (prepPid === 0) {
+                    ns.print(`ERROR - Prep script failed to start. Check logs. ${JSON.stringify({ prepTarget, prepPid })}`);
+                    ns.ui.openTail();
+                    throw new Error("Prep script failed to start.");
+                }
             }
+
         }
 
         await ns.sleep(10000);

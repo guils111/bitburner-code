@@ -306,8 +306,15 @@ function shouldBuildPower(ns, member) {
  * @returns {number}
  */
 function getChanceToWinClash(ns) {
-    const strongestGang = Object.entries(ns.gang.getAllGangInformation()).filter(gang => gang[0] !== ns.gang.getGangInformation().faction).sort((a, b) => b[1].power - a[1].power)[0];
+    const strongestGang = getStrongestGang(ns);
     return ns.gang.getChanceToWinClash(strongestGang[0]);
+}
+/**
+ * 
+ * @param {NS} ns 
+ */
+function getStrongestGang(ns) {
+    return Object.entries(ns.gang.getAllGangInformation()).filter(gang => gang[0] !== ns.gang.getGangInformation().faction && gang[1].territory > 0).sort((a, b) => b[1].power - a[1].power)[0];
 }
 
 /**
@@ -315,9 +322,8 @@ function getChanceToWinClash(ns) {
  * @param {NS} ns 
  */
 function clash(ns) {
-    const strongestGang = Object.entries(ns.gang.getAllGangInformation()).filter(gang => gang[0] !== ns.gang.getGangInformation().faction).sort((a, b) => b[1].power - a[1].power)[0];
 
-    ns.gang.setTerritoryWarfare(ns.gang.getChanceToWinClash(strongestGang[0]) > 0.55);
+    ns.gang.setTerritoryWarfare(getChanceToWinClash(ns) > 0.55);
 }
 
 //@ts-ignore
